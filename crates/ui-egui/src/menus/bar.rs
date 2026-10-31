@@ -110,6 +110,9 @@ pub(super) fn render_items(app: &VectorcraftApp, ui: &mut egui::Ui, items: &[Ite
             }
             Entry::Sub(label, children) => {
                 ui.menu_button(label, |ui| {
+                    if label == "Open Recent Files" {
+                        app.file_providers.recent_ui(ui);
+                    }
                     widgets::menu_scroll(ui, |ui| {
                         ui.set_min_width(200.0);
                         render_items(app, ui, children, checks, clicked);

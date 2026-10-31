@@ -44,6 +44,7 @@ const MAX_RESTARTS: u32 = 3;
 /// What the page keeps while the app runs, across graphics restarts.
 #[derive(Clone)]
 struct Host {
+    file_providers: vectorcraft_ui_egui::file_providers::Host,
     runner: eframe::WebRunner,
     inbox: Inbox,
     place_inbox: PlaceInbox,
@@ -72,6 +73,7 @@ pub fn start() {
         // shows; the rest load in the background once the app runs.
         crate::fonts::load_startup_fonts().await;
         let host = Host {
+            file_providers: vectorcraft_ui_egui::file_providers::Host::default(),
             runner: eframe::WebRunner::new(),
             inbox: Arc::default(),
             place_inbox: Arc::default(),
@@ -121,7 +123,7 @@ async fn run(host: Host, canvas: web_sys::HtmlCanvasElement, moving: Option<Movi
                 host.pasted.borrow_mut().ctx = Some(ctx.clone());
                 let stylus = host.pointers.borrow().stylus();
                 let services = services(host.inbox.clone(), host.place_inbox.clone(), ctx.clone(), host.locks.clone(), stylus);
-                let app = match taken.borrow_mut().take() {
+                let mut app = match taken.borrow_mut().take() {
                     Some(mut app) => {
                         // The old services asked the old context for frames.
                         app.services = services;
@@ -139,6 +141,10 @@ async fn run(host: Host, canvas: web_sys::HtmlCanvasElement, moving: Option<Movi
                         VectorcraftApp::new(Session::new(), services).with_control(control_rx)
                     }
                 };
+                app.file_providers = host.file_providers.clone();
+                if let Err(error) = crate::file_providers::install(app.file_providers.clone(), ctx.clone()) {
+                    log::error!("file provider capability could not be installed: {error:?}");
+                }
                 Ok(Box::new(WebShell { app: Some(app), host, canvas: page, loss }))
             }),
         )
@@ -370,6 +376,7 @@ impl eframe::App for WebShell {
         }
         let Some(app) = &mut self.app else { return };
         app.tick(ctx);
+        crate::file_providers::publish(&app.file_providers);
         crate::api::poll_replies();
         app.finish_ime_logic(ctx);
     }
@@ -420,6 +427,9 @@ impl eframe::App for WebShell {
                 }
             }
             app.ui(ui);
+        }
+        if let Some(app) = &self.app {
+            crate::file_providers::publish(&app.file_providers);
         }
         crate::api::poll_replies();
     }

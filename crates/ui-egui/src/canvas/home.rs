@@ -38,6 +38,7 @@ fn home_content(app: &mut VectorcraftApp, ui: &mut Ui) {
             app.run("file.open", json!({})).ok();
         }
     });
+    app.file_providers.recent_ui(ui);
     recent(app, ui);
     ui.add_space(28.0);
     ui.label(egui::RichText::new(tl!("Quickly start a new file")).font(theme::semibold(14.0)).color(t.text));

@@ -20,7 +20,7 @@ pub const KIND: &str = "saveChanges";
 /// Nothing closes while a file dialog's sheet is on the window (macOS): what asked for it runs
 /// again when it answers. (Elsewhere the dialog is a window of its own, and closing goes on.)
 fn refuse_while_picking(app: &VectorcraftApp) -> Result<(), String> {
-    if app.file_sheet_open() { Err(crate::picks::busy().into()) } else { Ok(()) }
+    if app.file_sheet_open() || app.file_providers.busy() { Err(crate::picks::busy().into()) } else { Ok(()) }
 }
 
 /// File → Close (or a tab's ×) for document `i`.
@@ -57,7 +57,7 @@ pub fn close_all(app: &mut VectorcraftApp, then: &str) -> Result<Value, String> 
 
 /// Is any open document modified (the window's close button must ask first)?
 pub fn any_dirty(app: &VectorcraftApp) -> bool {
-    app.session.documents().iter().any(|d| d.is_dirty())
+    app.file_providers.busy() || app.session.documents().iter().any(|d| d.is_dirty())
 }
 
 /// Show document `i` and ask whether to save it.

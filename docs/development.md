@@ -520,3 +520,8 @@ Scores and hour estimates are unchanged.
 | 2026-10-22 | minor | Merge current main and complete the Turkish tab-drag labels and validation messages requested by the maintainer; all 24 catalogs covered; scores and estimates unchanged. |
 | 2026-10-22 | minor | Tab-drag follow-up: reconcile upstream progress updates and document drag lifecycle, insertion behavior and regression contracts; behavior, scores and estimates unchanged. |
 | 2026-10-22 | minor | Artwork dragged with Selection switches visible document tabs after a 400 ms hover, then copies editable artwork on canvas release; source and clipboard stay intact; scores and hours unchanged |
+
+## Optional web file providers
+
+The disabled-by-default host capability and its storage/authentication boundaries are described in
+[web-file-providers.md](web-file-providers.md). Native local save and export remain the default.

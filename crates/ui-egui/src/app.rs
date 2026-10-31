@@ -59,6 +59,7 @@ impl VectorcraftApp {
             ui: UiState::default(),
             views,
             services,
+            file_providers: crate::file_providers::Host::default(),
             canvas: CanvasCache {
                 renderer: vectorcraft_render::Renderer::new(),
                 texture: None,
@@ -254,6 +255,7 @@ impl VectorcraftApp {
             return;
         }
         self.tick_iteration = Some(self.host_iteration);
+        crate::file_provider_app::tick(self);
         let dialog_was_open = self.ui.dialog.is_some();
         let lang = self.ui_language();
         i18n::set_current(lang);

@@ -36,6 +36,8 @@ pub mod dialogs;
 pub mod dock;
 mod edit_toolbar;
 pub mod export_progress;
+mod file_provider_app;
+pub mod file_providers;
 pub mod find_font;
 pub mod font_menu;
 mod frame_rate;
@@ -125,6 +127,8 @@ pub struct VectorcraftApp {
     pub ui: UiState,
     pub views: Vec<View>,
     pub services: Services,
+    /// Optional storage capability, disabled until the web host registers one.
+    pub file_providers: crate::file_providers::Host,
     pub canvas: CanvasCache,
     pub perf: Perf,
     /// Docking state that lives for the session only.

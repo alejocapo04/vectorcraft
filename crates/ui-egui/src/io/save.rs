@@ -234,6 +234,9 @@ fn plan(app: &VectorcraftApp, mode: SaveMode, p: &Value) -> Result<SavePlan, Str
 /// path?}` while a dialog is open.
 pub fn save(app: &mut VectorcraftApp, mode: SaveMode, p: &Value, ask_options: bool) -> Result<Value, String> {
     remember_view(app);
+    if app.file_providers.enabled() && matches!(mode, SaveMode::Save | SaveMode::SaveAs) && !app.ui.answering_control {
+        return crate::file_provider_app::save(app, mode == SaveMode::SaveAs);
+    }
     // Writing over the file the document was read from is asked about here, not refused.
     let first = plan(app, mode, &acknowledged(p))?;
     let ask = ask_options && !has_options(p);
