@@ -187,10 +187,20 @@ mod tests {
             let request = request(&mut app);
             app.file_providers.resolve_dialog(&request, "provider", "saved.vectorcraft").unwrap();
             app.file_providers.take_events();
+            let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+            let called = downloads.clone();
+            app.services.download = Some(Box::new(move |_, _| {
+                called.set(called.get() + 1);
+                Ok(())
+            }));
             app.file_providers.set_enabled(false).unwrap();
             for mode in [SaveMode::Save, SaveMode::SaveAs] {
-                assert!(crate::io::save(&mut app, mode, &json!({}), false).is_err());
+                assert_eq!(
+                    crate::io::save(&mut app, mode, &json!({}), false).unwrap_err(),
+                    "Enable the file provider before saving this provider document"
+                );
             }
+            assert_eq!(downloads.get(), 0);
             assert!(app.session.active().unwrap().is_dirty());
             assert!(app.file_providers.take_events().is_empty());
             app.file_providers.result(request, status.into(), if status == "saved" { "file-1".into() } else { String::new() }).unwrap();
