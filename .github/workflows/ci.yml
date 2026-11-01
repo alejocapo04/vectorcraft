@@ -1,30 +1,102 @@
-name: CI
-
-# Quality gates for every push to main and every pull request (`cargo xtask ci`), through the
-# suite's shared gate workflow in craft-common-actions.
+# Fork-only validation recipe. Never part of the upstream feature PR.
+# The product checkout is the immutable published feature commit, not this QA branch.
+name: Provider native QA
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-# A newer push to a PR branch cancels its older run; every push to main runs to the end.
-concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  gate:
-    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
-    with:
-      # Same craft-fonts commit as release.yml.
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      timeout-minutes: 90
-      packages: >-
-        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev
-        libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
-        libgl1-mesa-dev
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUST_TEST_THREADS: "1"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/provider-native-target
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+      TMPDIR: /tmp/acp-qa
+      XDG_RUNTIME_DIR: ${{ runner.temp }}/provider-runtime
+      XDG_CONFIG_HOME: ${{ runner.temp }}/provider-config
+      XDG_DATA_HOME: ${{ runner.temp }}/provider-data
+      XDG_CACHE_HOME: ${{ runner.temp }}/provider-cache
+      EVIDENCE_DIR: ${{ runner.temp }}/provider-evidence
+      CRAFT_PROVIDER_UI_FIXTURES: ${{ runner.temp }}/provider-evidence
+      WGPU_BACKEND: vulkan
+      EXPECTED_SOURCE_SHA: "7abf6155ed2cc8e64b626c9298b215d29b51c67b"
+      CARGO_CACHE_AUTO_CLEAN_FREQUENCY: "never"
+      NEXTEST_TEST_THREADS: "1"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: "7abf6155ed2cc8e64b626c9298b215d29b51c67b"
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: "b076417b5880bd4154bd22f00695b1d28c6bea83"
+          path: craft-fonts
+          persist-credentials: false
+      - name: Install existing native build prerequisites
+        uses: storytold/craft-common-actions/actions/install-apt-packages@44a7db40b1a3e99eed02c88f89f38cdd6cfffe81
+        with:
+          packages: "pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libxcursor-dev libxrandr-dev libxi-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers libgl1-mesa-dev libvulkan1"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: "1.99.1"
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+      - name: Prepare isolated native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          install -d -m 700 "$TMPDIR" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$EVIDENCE_DIR"
+          mkdir -p qa-output artifacts
+      - name: "Render provider and device Recents"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60m cargo test --locked -p vectorcraft-ui-egui --lib file_provider_app::tests::provider_recents_render_separately_from_device_history -- --exact --test-threads=1
+      - name: Verify native evidence and source identity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, struct, subprocess
+          expected = os.environ['EXPECTED_SOURCE_SHA']
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == expected, (actual, expected)
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          out = pathlib.Path(os.environ['EVIDENCE_DIR'])
+          fonts_sha = subprocess.check_output(['git','-C','craft-fonts','rev-parse','HEAD'],text=True).strip() if pathlib.Path('craft-fonts/.git').exists() else None
+          assert fonts_sha == "b076417b5880bd4154bd22f00695b1d28c6bea83"
+          rustc = subprocess.check_output(['rustc','-Vv'],text=True)
+          files = ["$EVIDENCE_DIR/vectorcraft-provider-recents-off.png","$EVIDENCE_DIR/vectorcraft-provider-recents-on.png"]
+          assert len(files) == 2
+          proof = []
+          for raw in files:
+              source = pathlib.Path(os.path.expandvars(raw))
+              data = source.read_bytes()
+              assert data[:8] == bytes([137,80,78,71,13,10,26,10]) and len(data)>1000, str(source)
+              width, height = struct.unpack('>II', data[16:24])
+              assert width>=300 and height>=300, (width,height)
+              target = out / source.name
+              if source.resolve() != target.resolve(): shutil.copy2(source,target)
+              proof.append(dict(file=target.name,width=width,height=height,bytes=len(data),sha256=hashlib.sha256(data).hexdigest()))
+          provenance = dict(source_sha=actual,fonts_sha=fonts_sha,rustc=rustc,workflow_sha=os.environ.get('GITHUB_SHA'),run_id=os.environ.get('GITHUB_RUN_ID'),renderer='repository native offscreen renderer; synthetic resources',browser_backend_e2e=False,images=proof)
+          (out / 'provenance.json').write_text(json.dumps(provenance,indent=2)+chr(10))
+          print(json.dumps(provenance))
+          PY
+      - name: Upload two native captures and provenance
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: provider-ui-vectorcraft-7abf6155ed2c
+          path: |
+            ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-off.png
+            ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-on.png
+            ${{ runner.temp }}/provider-evidence/provenance.json
+          if-no-files-found: error
+          retention-days: 14
