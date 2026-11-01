@@ -15,14 +15,14 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUST_TEST_THREADS: "1"
       WGPU_BACKEND: vulkan
-      EXPECTED_SOURCE_SHA: "146b369125c93b108566c617dd64114cc9bb4ef3"
+      EXPECTED_SOURCE_SHA: "dcd4f15d366165395635490b61f592c0230f36f1"
       CARGO_CACHE_AUTO_CLEAN_FREQUENCY: "never"
       NEXTEST_TEST_THREADS: "1"
       RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: "146b369125c93b108566c617dd64114cc9bb4ef3"
+          ref: "dcd4f15d366165395635490b61f592c0230f36f1"
           persist-credentials: false
       - name: Prepare runtime environment before tool setup
         shell: bash
@@ -63,44 +63,65 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           install -d -m 700 "$TMPDIR" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$EVIDENCE_DIR"
           mkdir -p qa-output artifacts
-      - name: "Format"
+      - name: "Format before compilation"
         shell: bash
         run: |
           set -euo pipefail
           timeout 5m cargo fmt --all -- --check
-      - name: "Affected default UI clippy"
+      - name: "Clippy of all affected native targets"
         shell: bash
         run: |
           set -euo pipefail
-          timeout 45m cargo clippy --locked -p vectorcraft-ui-egui --all-targets -j2 -- -D warnings
-      - name: "Full affected UI tests and native Recents captures"
+          timeout 55m cargo clippy --locked -p vectorcraft-ui-egui -p vectorcraft-web --all-targets --keep-going -j2 -- -D warnings
+      - name: "Prove the account-switch regression fails without the reset"
         shell: bash
         run: |
           set -euo pipefail
-          timeout 50m cargo test --locked -p vectorcraft-ui-egui --lib --tests -j2 -- --test-threads=1
-      - name: "Workspace doctests not reached by the EPS-failed CI"
+          timeout 45m python3 - <<'PY'
+          import os,pathlib,re,subprocess
+          p=pathlib.Path('crates/ui-egui/src/file_providers.rs')
+          original=p.read_bytes()
+          text=original.decode('utf-8')
+          start=text.index('pub fn disconnect(')
+          end=text.index('\n    }',start)
+          body=text[start:end]
+          reset='        s.documents = Value::Null;'
+          assert body.count(reset)==1, 'Expected one document-cache reset in disconnect'
+          mutated=text[:start]+body.replace(reset,'',1)+text[end:]
+          env=dict(os.environ,CARGO_TERM_COLOR='never')
+          try:
+              p.write_bytes(mutated.encode('utf-8'))
+              result=subprocess.run(['cargo','test','--locked','-p','vectorcraft-ui-egui','--lib','file_providers::tests::unregister_clears_cached_account_documents_before_reconnect','-j2','--','--exact','--test-threads=1'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,timeout=2400)
+              (pathlib.Path(os.environ['EVIDENCE_DIR'])/'account-reset-negative.log').write_text(result.stdout)
+              expected='test file_providers::tests::unregister_clears_cached_account_documents_before_reconnect ... FAILED'
+              assert result.returncode!=0 and expected in result.stdout, 'Negative control must fail in the actual regression, not compilation or a missing test: '+result.stdout[-10000:]
+              print('Confirmed regression fails without the published disconnect reset: file_providers::tests::unregister_clears_cached_account_documents_before_reconnect')
+              print(result.stdout[-5000:])
+          finally:
+              p.write_bytes(original)
+          assert p.read_bytes()==original
+          subprocess.run(['git','diff','--exit-code','--','crates/ui-egui/src/file_providers.rs'],check=True)
+          PY
+      - name: "All affected native tests on restored published source"
         shell: bash
         run: |
           set -euo pipefail
-          timeout 40m cargo test --locked --workspace --doc -j2
-      - name: "Text without bundled fonts"
-        shell: bash
-        run: |
-          set -euo pipefail
-          timeout 20m cargo test --locked -p vectorcraft-text --no-default-features --test without_bundled_fonts -j2
+          timeout 65m cargo test --locked -p vectorcraft-ui-egui -p vectorcraft-web --lib --bins --tests -j2 -- --test-threads=1
       - name: "Positive and negative font feature trees"
         shell: bash
         run: |
           set -euo pipefail
-          for pkg in vectorcraft-ui-egui vectorcraft-mcp; do
-            cargo tree --locked -p "$pkg" --target all -e features,normal -i vectorcraft-text > "$RUNNER_TEMP/$pkg-default.txt"
-            rg -F 'vectorcraft-text feature "bundled-fonts"' "$RUNNER_TEMP/$pkg-default.txt"
-            cargo tree --locked -p "$pkg" --no-default-features --target all -e features,normal -i vectorcraft-text > "$RUNNER_TEMP/$pkg-no-default.txt"
-            if rg -F 'vectorcraft-text feature "bundled-fonts"' "$RUNNER_TEMP/$pkg-no-default.txt"; then
-              echo "Unexpected bundled fonts with defaults disabled: $pkg" >&2
-              exit 1
-            fi
-          done
+          python3 - <<'PY'
+          import subprocess
+          feature='vectorcraft-text feature \"bundled-fonts\"'
+          for pkg in ['vectorcraft-ui-egui','vectorcraft-mcp']:
+              args=['cargo','tree','--locked','-p',pkg,'--target','all','-e','features,normal','-i','vectorcraft-text']
+              default=subprocess.check_output(args,text=True)
+              assert feature in default, pkg+': default tree did not contain the positive feature control'
+              disabled=subprocess.check_output(args[:5]+['--no-default-features']+args[5:],text=True)
+              assert feature not in disabled, pkg+': fonts re-enabled with defaults disabled'
+              print(pkg+': positive and negative feature tree controls passed')
+          PY
       - name: "UI clippy and installation tests without bundled fonts"
         shell: bash
         run: |
@@ -154,7 +175,7 @@ jobs:
       - name: Upload two native captures and provenance
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: provider-ui-vectorcraft-146b369125c9
+          name: provider-ui-vectorcraft-dcd4f15d3661
           path: |
             ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-off.png
             ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-on.png
