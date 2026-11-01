@@ -234,6 +234,13 @@ fn plan(app: &VectorcraftApp, mode: SaveMode, p: &Value) -> Result<SavePlan, Str
 /// path?}` while a dialog is open.
 pub fn save(app: &mut VectorcraftApp, mode: SaveMode, p: &Value, ask_options: bool) -> Result<Value, String> {
     remember_view(app);
+    if matches!(mode, SaveMode::Save | SaveMode::SaveAs)
+        && !app.ui.answering_control
+        && !app.file_providers.enabled()
+        && app.session.active().is_some_and(|doc| app.file_providers.owns_document(doc.uid))
+    {
+        return Err("Enable the file provider before saving this provider document".into());
+    }
     if app.file_providers.enabled() && matches!(mode, SaveMode::Save | SaveMode::SaveAs) && !app.ui.answering_control {
         return crate::file_provider_app::save(app, mode == SaveMode::SaveAs);
     }

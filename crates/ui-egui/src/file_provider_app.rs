@@ -36,6 +36,11 @@ pub(crate) fn tick(app: &mut VectorcraftApp) {
                 let alive = app.session.documents().iter().any(|d| d.uid == capture.doc);
                 // This is the captured checkpoint, never whatever document is active at reply time.
                 if status == "saved" {
+                    for alias in host.unbind_resource_aliases(capture.doc, &resource) {
+                        if let Some(doc) = app.session.document_mut(alias) {
+                            doc.mark_unsaved();
+                        }
+                    }
                     for snapshot in &capture.snapshots {
                         if let Some(doc) = app.session.document_mut(snapshot.uid) {
                             doc.mark_saved_as(&snapshot.doc);
@@ -96,6 +101,104 @@ mod tests {
         assert_eq!(events[0].metadata["type"], "saveDialog");
         events[0].metadata["requestId"].as_str().unwrap().to_string()
     }
+    #[test]
+    fn durable_overwrite_invalidates_the_previous_owner_before_reopening_the_resource() {
+        for queued_together in [false, true] {
+            for later_edit in [false, true] {
+                let mut app = app();
+                let first = app.session.active().unwrap().uid;
+                std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).title = "First".into();
+                let first_request = request(&mut app);
+                app.file_providers.resolve_dialog(&first_request, "provider", "shared.vectorcraft").unwrap();
+                app.file_providers.take_events();
+                app.session.execute("file.new", &json!({})).unwrap();
+                let second = app.session.active().unwrap().uid;
+                std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).title = "Second".into();
+                let second_request = request(&mut app);
+                app.file_providers.resolve_dialog(&second_request, "provider", "shared.vectorcraft").unwrap();
+                let bytes = app.file_providers.take_events().remove(0).bytes.unwrap();
+                if later_edit {
+                    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).title = "Second after capture".into();
+                }
+                let before: Vec<_> = app.session.documents().iter().map(|doc| (doc.uid, doc.revision, doc.doc.clone())).collect();
+                app.file_providers.result(first_request, "saved".into(), "shared".into()).unwrap();
+                if !queued_together {
+                    tick(&mut app);
+                }
+                app.file_providers.result(second_request, "saved".into(), "shared".into()).unwrap();
+                tick(&mut app);
+                assert_eq!(app.session.active().unwrap().uid, second);
+                assert!(app.session.documents().iter().find(|doc| doc.uid == first).unwrap().is_dirty());
+                assert_eq!(app.session.active().unwrap().is_dirty(), later_edit);
+                assert!(app.file_providers.bound_filename(first).is_none());
+                assert_eq!(app.file_providers.bound_document("shared"), Some(second));
+                for (uid, revision, content) in before {
+                    let doc = app.session.documents().iter().find(|doc| doc.uid == uid).unwrap();
+                    assert_eq!(doc.revision, revision);
+                    assert!(std::sync::Arc::ptr_eq(&doc.doc, &content));
+                }
+                app.session.execute("document.activate", &json!({"index":0})).unwrap();
+                let read = app.file_providers.request_open("shared").unwrap();
+                app.file_providers.open(read, "shared.vectorcraft".into(), bytes).unwrap();
+                tick(&mut app);
+                assert_eq!(app.session.documents().len(), 2);
+                assert_eq!(app.session.active().unwrap().uid, second);
+                assert_eq!(app.session.active().unwrap().is_dirty(), later_edit);
+            }
+        }
+    }
+
+    #[test]
+    fn paused_bound_saves_do_not_fall_back_to_a_download() {
+        let mut app = app();
+        let request = request(&mut app);
+        app.file_providers.resolve_dialog(&request, "provider", "saved.vectorcraft").unwrap();
+        app.file_providers.take_events();
+        app.file_providers.result(request, "saved".into(), "file-1".into()).unwrap();
+        tick(&mut app);
+        app.file_providers.take_events();
+        let uid = app.session.active().unwrap().uid;
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).title = "Unsaved provider edit".into();
+        let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let called = downloads.clone();
+        app.services.download = Some(Box::new(move |_, _| {
+            called.set(called.get() + 1);
+            Ok(())
+        }));
+        app.file_providers.set_enabled(false).unwrap();
+        for mode in [SaveMode::Save, SaveMode::SaveAs] {
+            assert!(crate::io::save(&mut app, mode, &json!({}), false).unwrap_err().contains("Enable the file provider"));
+        }
+        assert_eq!(downloads.get(), 0);
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(app.session.active().unwrap().path.is_none());
+        assert_eq!(app.file_providers.bound_document("file-1"), Some(uid));
+        assert!(app.file_providers.take_events().is_empty());
+        app.file_providers.set_enabled(true).unwrap();
+        assert_eq!(app.file_providers.bound_document("file-1"), Some(uid));
+        assert!(app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn pausing_an_unbound_pending_save_does_not_enable_a_fallback_save() {
+        for status in ["failed", "cancel", "saved"] {
+            let mut app = app();
+            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).title = "Captured".into();
+            let request = request(&mut app);
+            app.file_providers.resolve_dialog(&request, "provider", "saved.vectorcraft").unwrap();
+            app.file_providers.take_events();
+            app.file_providers.set_enabled(false).unwrap();
+            for mode in [SaveMode::Save, SaveMode::SaveAs] {
+                assert!(crate::io::save(&mut app, mode, &json!({}), false).is_err());
+            }
+            assert!(app.session.active().unwrap().is_dirty());
+            assert!(app.file_providers.take_events().is_empty());
+            app.file_providers.result(request, status.into(), if status == "saved" { "file-1".into() } else { String::new() }).unwrap();
+            tick(&mut app);
+            assert_eq!(app.session.active().unwrap().is_dirty(), status != "saved");
+        }
+    }
+
     #[test]
     fn provider_ack_cannot_clear_edits_made_after_capture() {
         let mut app = app();
