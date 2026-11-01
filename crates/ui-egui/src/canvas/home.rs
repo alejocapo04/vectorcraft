@@ -69,8 +69,10 @@ fn recent(app: &mut VectorcraftApp, ui: &mut Ui) {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    ui.add_space(28.0);
-    ui.label(egui::RichText::new(tl!("Recent Files")).font(theme::semibold(14.0)).color(t.text));
+    if !app.file_providers.enabled() {
+        ui.add_space(28.0);
+        ui.label(egui::RichText::new(tl!("Recent Files")).font(theme::semibold(14.0)).color(t.text));
+    }
     ui.add_space(8.0);
     for path in files {
         if recent_row(ui, &path).clicked() {

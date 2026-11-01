@@ -143,10 +143,10 @@ mod tests {
         if let Some(path) = &directory {
             std::fs::create_dir_all(path).unwrap();
         }
-        for enabled in [false, true] {
+        for (connected, enabled) in [(false, false), (true, false), (true, true)] {
             let mut app = VectorcraftApp::new(Session::new(), crate::Services::default());
             crate::io::note_recent(&mut app, "Device drawing.vectorcraft");
-            if enabled {
+            if connected {
                 let host = &app.file_providers;
                 host.set_session("fixture-session-0123456789abcdef".into()).unwrap();
                 let connection = host.connect("fixture".into(), "External storage".into(), "fixture-account".into()).unwrap();
@@ -159,6 +159,7 @@ mod tests {
                     }],
                 )
                 .unwrap();
+                host.set_enabled(enabled).unwrap();
             }
             let mut builder = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 900.0));
             if directory.is_some() {
@@ -194,7 +195,8 @@ mod tests {
             assert_eq!(found.iter().any(|text| text == "Provider drawing.vectorcraft"), enabled, "{found:?}");
             assert_eq!(found.iter().any(|text| text == "Recent files — External storage"), enabled, "{found:?}");
             assert_eq!(found.iter().any(|text| text == "Recent files on this device"), enabled, "{found:?}");
-            if let Some(path) = &directory {
+            assert_eq!(found.iter().filter(|text| text.as_str() == "Recent Files").count(), usize::from(!enabled), "{found:?}");
+            if let Some(path) = directory.as_ref().filter(|_| !connected || enabled) {
                 let state = if enabled { "on" } else { "off" };
                 harness.render().unwrap().save(path.join(format!("vectorcraft-provider-recents-{state}.png"))).unwrap();
             }
