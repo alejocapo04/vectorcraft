@@ -8,21 +8,21 @@ permissions:
 jobs:
   native:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUST_TEST_THREADS: "1"
       WGPU_BACKEND: vulkan
-      EXPECTED_SOURCE_SHA: "7abf6155ed2cc8e64b626c9298b215d29b51c67b"
+      EXPECTED_SOURCE_SHA: "146b369125c93b108566c617dd64114cc9bb4ef3"
       CARGO_CACHE_AUTO_CLEAN_FREQUENCY: "never"
       NEXTEST_TEST_THREADS: "1"
       RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: "7abf6155ed2cc8e64b626c9298b215d29b51c67b"
+          ref: "146b369125c93b108566c617dd64114cc9bb4ef3"
           persist-credentials: false
       - name: Prepare runtime environment before tool setup
         shell: bash
@@ -63,11 +63,65 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           install -d -m 700 "$TMPDIR" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$EVIDENCE_DIR"
           mkdir -p qa-output artifacts
-      - name: "Render provider and device Recents"
+      - name: "Format"
         shell: bash
         run: |
           set -euo pipefail
-          timeout 60m cargo test --locked -p vectorcraft-ui-egui --lib file_provider_app::tests::provider_recents_render_separately_from_device_history -- --exact --test-threads=1
+          timeout 5m cargo fmt --all -- --check
+      - name: "Affected default UI clippy"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 45m cargo clippy --locked -p vectorcraft-ui-egui --all-targets -j2 -- -D warnings
+      - name: "Full affected UI tests and native Recents captures"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 50m cargo test --locked -p vectorcraft-ui-egui --lib --tests -j2 -- --test-threads=1
+      - name: "Workspace doctests not reached by the EPS-failed CI"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo test --locked --workspace --doc -j2
+      - name: "Text without bundled fonts"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 20m cargo test --locked -p vectorcraft-text --no-default-features --test without_bundled_fonts -j2
+      - name: "Positive and negative font feature trees"
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pkg in vectorcraft-ui-egui vectorcraft-mcp; do
+            cargo tree --locked -p "$pkg" --target all -e features,normal -i vectorcraft-text > "$RUNNER_TEMP/$pkg-default.txt"
+            rg -F 'vectorcraft-text feature "bundled-fonts"' "$RUNNER_TEMP/$pkg-default.txt"
+            cargo tree --locked -p "$pkg" --no-default-features --target all -e features,normal -i vectorcraft-text > "$RUNNER_TEMP/$pkg-no-default.txt"
+            if rg -F 'vectorcraft-text feature "bundled-fonts"' "$RUNNER_TEMP/$pkg-no-default.txt"; then
+              echo "Unexpected bundled fonts with defaults disabled: $pkg" >&2
+              exit 1
+            fi
+          done
+      - name: "UI clippy and installation tests without bundled fonts"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 30m cargo clippy --locked -p vectorcraft-ui-egui --no-default-features --all-targets -j2 -- -D warnings
+          timeout 15m cargo test --locked -p vectorcraft-ui-egui --no-default-features --test install_fonts -j2 -- --test-threads=1
+      - name: "Remaining structural gates"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 10m cargo xtask pdf-deps
+          timeout 10m cargo xtask assets
+          timeout 10m cargo xtask brands
+          timeout 5m cargo xtask cursors
+          timeout 10m cargo xtask i18n-report
+          timeout 10m cargo xtask layers
+      - name: "Actual web app and WASM-safe crates"
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 40m cargo xtask wasm
       - name: Verify native evidence and source identity
         shell: bash
         run: |
@@ -100,7 +154,7 @@ jobs:
       - name: Upload two native captures and provenance
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: provider-ui-vectorcraft-7abf6155ed2c
+          name: provider-ui-vectorcraft-146b369125c9
           path: |
             ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-off.png
             ${{ runner.temp }}/provider-evidence/vectorcraft-provider-recents-on.png
