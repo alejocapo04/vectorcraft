@@ -134,4 +134,70 @@ mod tests {
         assert!(app.session.active().unwrap().is_dirty());
         assert!(app.file_providers.snapshot()["resources"].as_array().unwrap().is_empty());
     }
+
+    /// The actual Home screen, with the optional host absent and then connected. Setting
+    /// CRAFT_PROVIDER_UI_FIXTURES also saves offscreen PNGs through the existing test renderer.
+    #[test]
+    fn provider_recents_render_separately_from_device_history() {
+        let directory = std::env::var_os("CRAFT_PROVIDER_UI_FIXTURES").map(std::path::PathBuf::from);
+        if let Some(path) = &directory {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for enabled in [false, true] {
+            let mut app = VectorcraftApp::new(Session::new(), crate::Services::default());
+            crate::io::note_recent(&mut app, "Device drawing.vectorcraft");
+            if enabled {
+                let host = &app.file_providers;
+                host.set_session("fixture-session-0123456789abcdef".into()).unwrap();
+                let connection = host.connect("fixture".into(), "External storage".into(), "fixture-account".into()).unwrap();
+                host.set_resources(
+                    &connection,
+                    vec![crate::file_providers::Resource {
+                        id: "provider-drawing".into(),
+                        name: "Provider drawing.vectorcraft".into(),
+                        updated_at: String::new(),
+                    }],
+                )
+                .unwrap();
+            }
+            let mut builder = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 900.0));
+            if directory.is_some() {
+                builder = builder.wgpu();
+            }
+            let mut ready = false;
+            let mut harness = builder.build_ui_state(
+                move |ui, app: &mut VectorcraftApp| {
+                    // The builder's initial pass precedes the texture-size override below.
+                    if !ready {
+                        ready = true;
+                        return;
+                    }
+                    app.tick(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+            harness.input_mut().max_texture_side = Some(8192);
+            harness.run_steps(6);
+            fn texts(shape: &egui::Shape, found: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(text) => found.push(text.galley.text().to_string()),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, found)),
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            for shape in &harness.output().shapes {
+                texts(&shape.shape, &mut found);
+            }
+            assert!(found.iter().any(|text| text == "Device drawing.vectorcraft"), "{found:?}");
+            assert_eq!(found.iter().any(|text| text == "Provider drawing.vectorcraft"), enabled, "{found:?}");
+            assert_eq!(found.iter().any(|text| text == "Recent files — External storage"), enabled, "{found:?}");
+            assert_eq!(found.iter().any(|text| text == "Recent files on this device"), enabled, "{found:?}");
+            if let Some(path) = &directory {
+                let state = if enabled { "on" } else { "off" };
+                harness.render().unwrap().save(path.join(format!("vectorcraft-provider-recents-{state}.png"))).unwrap();
+            }
+        }
+    }
 }

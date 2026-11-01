@@ -100,3 +100,17 @@ source, as required by this contribution's development order. This document does
 have been executed merely because fixtures are present.
 
 Contributor credit: @alejocapo04.
+
+## Native UI evidence
+
+The existing UI test renderer can capture the actual Home screen in two states: the default-off
+host with device history, and an opt-in provider with its own separate recent section. The
+fixture uses synthetic names and resource metadata; it does not provide storage or authentication.
+Without the output variable it still checks the painted native labels, without a GPU.
+
+```sh
+CRAFT_PROVIDER_UI_FIXTURES=/absolute/output cargo test --locked -p vectorcraft-ui-egui --lib file_provider_app::tests::provider_recents_render_separately_from_device_history -- --exact --test-threads=1
+```
+
+This writes `vectorcraft-provider-recents-off.png` and `vectorcraft-provider-recents-on.png`
+through egui_kittest's existing offscreen renderer. Generated images are review artifacts, not assets.
