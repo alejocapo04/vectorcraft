@@ -12,7 +12,8 @@ pub(crate) fn save(app: &mut VectorcraftApp, save_as: bool) -> Result<Value, Str
     if host.pending_for(doc.uid) {
         return Err("a file provider save is already pending for this document".into());
     }
-    let mut plan = fileio::save_plan(&app.session, SaveMode::SaveAs, &json!({"format":"vectorcraft","compress":true})).map_err(|e| e.to_string())?;
+    let mut plan = fileio::save_plan(&app.session, SaveMode::SaveAs, &json!({"format":"vectorcraft","compress":true,"includeLinked":true}))
+        .map_err(|e| e.to_string())?;
     plan.path = None;
     let name = host.bound_filename(doc.uid).unwrap_or_else(|| plan.name.clone());
     let (uid, revision, snapshot) = (doc.uid, doc.revision, doc.clone());
@@ -100,6 +101,68 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].metadata["type"], "saveDialog");
         events[0].metadata["requestId"].as_str().unwrap().to_string()
+    }
+    #[test]
+    fn provider_capture_keeps_linked_original_bytes_without_external_files() {
+        use std::sync::Arc;
+        use vectorcraft_doc::links::LinkInfo;
+        use vectorcraft_doc::{ImageBlob, ImageObject, Node, NodeKind};
+        use vectorcraft_geom::Affine;
+
+        // Original synthetic PNGs generated in code for VectorCraft, MIT OR Apache-2.0.
+        let png = |size: u32, color: [u8; 4]| {
+            let mut bytes = Vec::new();
+            image::RgbaImage::from_pixel(size, size, image::Rgba(color))
+                .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+                .unwrap();
+            bytes
+        };
+        let original = png(4, [200, 40, 20, 255]);
+        let preview = png(1, [20, 40, 200, 255]);
+        assert_ne!(original, preview);
+        for later_edit in [false, true] {
+            let mut app = app();
+            let doc = Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            let layer = doc.layers[0].id;
+            let id = doc.alloc_id();
+            let image = ImageObject {
+                key: "provider-linked-original".into(),
+                width: 4,
+                height: 4,
+                xf: Affine::IDENTITY,
+                link: Some(LinkInfo::new("/__vectorcraft_provider_fixture__/unavailable.png")),
+                placement: Default::default(),
+                pixels: None,
+            };
+            doc.insert(Some(layer), 0, Node::new(id, NodeKind::Image(Box::new(image)))).unwrap();
+            let mut blob = ImageBlob::new("image/png", original.clone());
+            blob.proxy = Some(Arc::new(preview.clone()));
+            doc.images.insert("provider-linked-original".into(), blob);
+            let captured = app.session.active().unwrap();
+            let (uid, revision) = (captured.uid, captured.revision);
+            let request = request(&mut app);
+            app.file_providers.resolve_dialog(&request, "provider", "linked.vectorcraft").unwrap();
+            let event = app.file_providers.take_events().into_iter().find(|event| event.metadata["type"] == "save").unwrap();
+            assert_eq!(event.metadata["documentId"], uid.to_string());
+            assert_eq!(event.metadata["revision"], revision.to_string());
+            // Decode the actual provider payload with no filesystem or linked-file resolver.
+            let reopened = vectorcraft_format::load(event.bytes.as_ref().unwrap()).unwrap();
+            let image = &reopened.images["provider-linked-original"];
+            assert_eq!(image.bytes.as_slice(), original.as_slice());
+            assert!(!image.is_proxy());
+            if later_edit {
+                app.session.execute("shape.rectangle", &json!({"x":1,"y":1,"width":2,"height":2})).unwrap();
+            }
+            let current = app.session.active().unwrap();
+            let (current_revision, content) = (current.revision, current.doc.clone());
+            assert_eq!(current_revision > revision, later_edit);
+            app.file_providers.result(request, "saved".into(), "linked-resource".into()).unwrap();
+            tick(&mut app);
+            let current = app.session.active().unwrap();
+            assert_eq!((current.uid, current.revision, current.is_dirty()), (uid, current_revision, later_edit));
+            assert!(Arc::ptr_eq(&current.doc, &content));
+            assert_eq!(app.file_providers.bound_document("linked-resource"), Some(uid));
+        }
     }
     #[test]
     fn durable_overwrite_invalidates_the_previous_owner_before_reopening_the_resource() {

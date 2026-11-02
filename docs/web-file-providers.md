@@ -73,7 +73,8 @@ disabled or unregistered, the original browser/native save flow remains in use.
 Provider Save/Save As always captures .vectorcraft, the editable native project with its embedded resources.
 Use the existing local Copy/Export commands for interchange formats. The host must preserve the native
 extension; changing a suffix cannot turn native bytes into PDF, SVG or another interchange format.
-Native capture uses the existing native save job/encoder. A provider save requires a single self-contained file; sidecar exports stay in the existing local export flow.
+Native capture uses the existing native save job/encoder with Include Linked Files enabled, carrying available originals instead of only linked previews.
+Already-missing originals retain the native format's preview and relinking behavior. A provider save requires a single self-contained file; sidecar exports stay in the existing local export flow.
 
 Normal close/revert actions wait or refuse while provider work is unresolved. The browser can still
 force-close/reload a tab; the host should provide an unsaved-work warning and must not acknowledge a
